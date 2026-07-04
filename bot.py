@@ -32,6 +32,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Мой статус", "💳 Купить подписку"],
         ["📖 Инструкция", "ℹ️ Помощь"],
+        ["🎫 Поддержка"],
     ],
     resize_keyboard=True,
     input_field_placeholder="Выберите действие..."
@@ -725,6 +726,7 @@ async def on_deleted_business_messages(update: Update, context: ContextTypes.DEF
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    await db.register_user(user.id, user.first_name, user.last_name, user.username)
     sub_enabled = await db.is_subscription_enabled()
     has_access = await check_access(user.id)
 
@@ -765,16 +767,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_info = await context.bot.get_me()
     await update.message.reply_text(
         "ℹ️ <b>Помощь</b>\n\n"
         "/start — главное меню\n"
         "/status — статус подписки\n"
-        "/subscribe — купить подписку\n"
-        "/admin — панель администратора\n\n"
-        "<b>Как подключить бота:</b>\n"
+        "/subscribe — купить подписку\n\n"
+        "<b>С Telegram Premium:</b>\n"
         "Настройки → Telegram Business → Чат-боты\n"
-        f"→ введите <code>@{bot_info.username}</code> → Подключить\n\n"
+        "→ введите <code>@Wilaenowspy_bot</code> → Подключить\n\n"
+        "<b>Без Telegram Premium:</b>\n"
+        "Настройки → Изменить (профиль) → Автоматизация чатов\n"
+        "→ Подключить → <code>@Wilaenowspy_bot</code>\n\n"
         "<b>Что перехватывается:</b>\n"
         "• 🗑 Удалённые сообщения (восстанавливаем из кэша)\n"
         "• ✏️ Изменённые (было → стало)\n"
@@ -952,6 +955,54 @@ async def _do_rub_payment(context, user_id: int, plan_id: int,
         await context.bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
 
+# ─── Поддержка (тикеты) ───────────────────────────────────────────────────────
+
+async def show_support_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False):
+    user_id = update.effective_user.id
+    ticket = await db.get_user_open_ticket(user_id)
+    if ticket:
+        await show_ticket_for_user(update, context, ticket["id"], edit=edit)
+        return
+    text = (
+        "🎫 <b>Поддержка</b>\n\n"
+        "У вас нет открытых тикетов.\n"
+        "Нажмите кнопку ниже, чтобы написать в поддержку:"
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✉️ Создать тикет", callback_data="support_new_ticket")]])
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def show_ticket_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_id: int, edit: bool = False):
+    ticket = await db.get_ticket(ticket_id)
+    if not ticket:
+        return
+    messages = await db.get_ticket_messages(ticket_id)
+    status_icon = "🟢" if ticket["status"] == "open" else "🔴"
+    text = f"🎫 <b>Тикет #{ticket_id}</b> {status_icon}\n\n"
+    shown = messages[-6:] if len(messages) > 6 else messages
+    if len(messages) > 6:
+        text += f"<i>... показаны последние {len(shown)} из {len(messages)} сообщений</i>\n\n"
+    for m in shown:
+        prefix = "🔧 <b>Поддержка:</b>" if m["is_admin"] else "👤 <b>Вы:</b>"
+        text += f"{prefix}\n{m['text'][:300]}\n\n"
+    buttons = []
+    if ticket["status"] == "open":
+        buttons.append([InlineKeyboardButton("✉️ Ответить", callback_data=f"support_reply_{ticket_id}")])
+        buttons.append([InlineKeyboardButton("✅ Закрыть тикет", callback_data=f"support_close_{ticket_id}")])
+    else:
+        text += "🔴 <i>Тикет закрыт</i>"
+    kb = InlineKeyboardMarkup(buttons)
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        msg = update.message if update.message else (update.callback_query.message if update.callback_query else None)
+        if msg:
+            await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
 # ─── Обработчик кнопок ────────────────────────────────────────────────────────
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -978,14 +1029,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "instructions":
-        bot_info = await context.bot.get_me()
         await query.edit_message_text(
             "📖 <b>Инструкция по подключению</b>\n\n"
-            "1. Откройте <b>Настройки Telegram</b>\n"
-            "2. Перейдите в <b>Telegram Business</b>\n"
-            "3. Выберите <b>Чат-боты</b>\n"
-            f"4. Введите <code>@{bot_info.username}</code>\n"
-            "5. Нажмите <b>Подключить</b> и выберите чаты\n\n"
+            "🔷 <b>С Telegram Premium:</b>\n"
+            "Настройки → Telegram Business → Чат-боты\n"
+            "→ введите <code>@Wilaenowspy_bot</code> → Подключить\n\n"
+            "🔶 <b>Без Telegram Premium:</b>\n"
+            "Настройки → Изменить (профиль) → Автоматизация чатов\n"
+            "→ Подключить → <code>@Wilaenowspy_bot</code>\n\n"
             "✅ Готово! Бот сразу начнёт перехватывать сообщения.\n\n"
             "⚡ <i>Подключение занимает ~30 секунд</i>",
             parse_mode="HTML",
@@ -999,6 +1050,50 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "sub_info":
         pass
+
+    elif data == "support_menu":
+        await show_support_menu(update, context, edit=True)
+
+    elif data == "support_new_ticket":
+        context.user_data["user_state"] = "creating_ticket"
+        await query.edit_message_text(
+            "✉️ <b>Создание тикета</b>\n\nОпишите вашу проблему или вопрос.\nСледующее сообщение станет обращением в поддержку:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="support_menu")]])
+        )
+
+    elif data.startswith("support_view_ticket_"):
+        ticket_id = int(data.split("_")[-1])
+        await show_ticket_for_user(update, context, ticket_id, edit=True)
+
+    elif data.startswith("support_reply_"):
+        ticket_id = int(data.split("_")[-1])
+        context.user_data["user_state"] = "replying_ticket"
+        context.user_data["active_ticket_id"] = ticket_id
+        await query.edit_message_text(
+            f"✉️ <b>Ответ на тикет #{ticket_id}</b>\n\nВведите ваше сообщение:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=f"support_view_ticket_{ticket_id}")]])
+        )
+
+    elif data.startswith("support_close_"):
+        ticket_id = int(data.split("_")[-1])
+        await db.close_ticket(ticket_id)
+        admin_ids = await db.get_admin_ids()
+        for aid in admin_ids:
+            try:
+                await context.bot.send_message(
+                    aid,
+                    f"🎫 Тикет #{ticket_id} закрыт пользователем.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"📩 Тикет #{ticket_id}", callback_data=f"admin_ticket_{ticket_id}")]])
+                )
+            except Exception:
+                pass
+        await query.edit_message_text(
+            f"✅ <b>Тикет #{ticket_id} закрыт.</b>\n\nСпасибо за обращение!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="support_menu")]])
+        )
 
     elif data.startswith("pay_rub_"):
         plan_id = int(data.split("_")[-1])
@@ -1104,6 +1199,74 @@ async def general_message_handler(update: Update, context: ContextTypes.DEFAULT_
 
     text = (update.message.text or "").strip()
     state = context.user_data.get("user_state")
+    user = update.effective_user
+
+    # Создание тикета
+    if state == "creating_ticket":
+        context.user_data.pop("user_state", None)
+        ticket_id = await db.create_ticket(user.id)
+        await db.add_ticket_message(ticket_id, user.id, False, text)
+        admin_ids = await db.get_admin_ids()
+        uname = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if user.username:
+            uname += f" (@{user.username})"
+        for aid in admin_ids:
+            try:
+                await context.bot.send_message(
+                    aid,
+                    f"🎫 <b>Новый тикет #{ticket_id}</b>\n"
+                    f"👤 {uname} (<code>{user.id}</code>)\n\n"
+                    f"💬 {text[:500]}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(f"📩 Открыть тикет #{ticket_id}", callback_data=f"admin_ticket_{ticket_id}")
+                    ]])
+                )
+            except Exception:
+                pass
+        await update.message.reply_text(
+            f"✅ <b>Тикет #{ticket_id} создан!</b>\n\nАдминистратор ответит в ближайшее время.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"📩 Посмотреть тикет #{ticket_id}", callback_data=f"support_view_ticket_{ticket_id}")
+            ]])
+        )
+        return
+
+    # Ответ в тикет
+    if state == "replying_ticket":
+        ticket_id = context.user_data.pop("active_ticket_id", None)
+        context.user_data.pop("user_state", None)
+        if not ticket_id:
+            return
+        ticket = await db.get_ticket(ticket_id)
+        if not ticket or ticket["status"] != "open":
+            await update.message.reply_text("❌ Тикет уже закрыт.", reply_markup=MAIN_KEYBOARD)
+            return
+        await db.add_ticket_message(ticket_id, user.id, False, text)
+        admin_ids = await db.get_admin_ids()
+        uname = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if user.username:
+            uname += f" (@{user.username})"
+        for aid in admin_ids:
+            try:
+                await context.bot.send_message(
+                    aid,
+                    f"💬 <b>Ответ в тикете #{ticket_id}</b>\n👤 {uname}\n\n{text[:500]}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(f"📩 Открыть тикет #{ticket_id}", callback_data=f"admin_ticket_{ticket_id}")
+                    ]])
+                )
+            except Exception:
+                pass
+        await update.message.reply_text(
+            "✉️ Сообщение отправлено.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"📩 Тикет #{ticket_id}", callback_data=f"support_view_ticket_{ticket_id}")
+            ]])
+        )
+        return
 
     # Email для ЮКассы
     if state == "waiting_email":
@@ -1134,20 +1297,22 @@ async def general_message_handler(update: Update, context: ContextTypes.DEFAULT_
     elif text == "💳 Купить подписку":
         await subscribe_command(update, context)
     elif text == "📖 Инструкция":
-        bot_info = await context.bot.get_me()
         await update.message.reply_text(
             "📖 <b>Инструкция по подключению</b>\n\n"
-            "1. Откройте <b>Настройки Telegram</b>\n"
-            "2. Перейдите в <b>Telegram Business</b>\n"
-            "3. Выберите <b>Чат-боты</b>\n"
-            f"4. Введите <code>@{bot_info.username}</code>\n"
-            "5. Нажмите <b>Подключить</b> и выберите нужные чаты\n\n"
+            "🔷 <b>С Telegram Premium:</b>\n"
+            "Настройки → Telegram Business → Чат-боты\n"
+            "→ введите <code>@Wilaenowspy_bot</code> → Подключить\n\n"
+            "🔶 <b>Без Telegram Premium:</b>\n"
+            "Настройки → Изменить (профиль) → Автоматизация чатов\n"
+            "→ Подключить → <code>@Wilaenowspy_bot</code>\n\n"
             "✅ После подключения бот сразу начнёт работать.",
             parse_mode="HTML",
             reply_markup=MAIN_KEYBOARD
         )
     elif text == "ℹ️ Помощь":
         await help_command(update, context)
+    elif text == "🎫 Поддержка":
+        await show_support_menu(update, context)
 
 
 # ─── Debug: логирует ВСЕ входящие апдейты (для диагностики) ──────────────────
